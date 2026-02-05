@@ -1,11 +1,13 @@
 services:
-  # Backend API
+  # Backend API (Standard Node.js Web Service)
   - type: web
     name: watchhive-api
     env: node
     plan: free
+    region: singapore # Change to your preferred region
     buildCommand: cd server && npm install && npm run build && npx prisma generate
     startCommand: cd server && npx prisma migrate deploy && npm run start
+    healthCheckPath: /health
     envVars:
       - key: NODE_ENV
         value: production
@@ -24,17 +26,20 @@ services:
         generateValue: true
       - key: JWT_REFRESH_SECRET
         generateValue: true
+      - key: TMDB_API_KEY
+        sync: false # Render will prompt the user for this value
       - key: FRONTEND_URL
         fromService:
           type: static
           name: watchhive-client
           property: url
 
-  # Frontend Client
+  # Frontend Client (Static Site for Performance)
   - type: static
     name: watchhive-client
     env: static
     plan: free
+    region: singapore
     buildCommand: cd client && npm install && npm run build
     staticPublishPath: client/dist
     envVars:
@@ -48,7 +53,9 @@ services:
 databases:
   - name: watchhive-db
     plan: free
+    region: singapore
 
 kv:
   - name: watchhive-cache
     plan: free
+    region: singapore
