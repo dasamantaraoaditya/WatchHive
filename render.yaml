@@ -30,13 +30,13 @@ services:
         sync: false # Render will prompt the user for this value
       - key: FRONTEND_URL
         fromService:
-          type: static
+          type: static_site
           name: watchhive-client
           property: url
 
+static_sites:
   # Frontend Client (Static Site for Performance)
-  - type: static
-    name: watchhive-client
+  - name: watchhive-client
     env: static
     plan: free
     region: singapore
@@ -53,9 +53,7 @@ services:
 databases:
   - name: watchhive-db
     plan: free
-    region: singapore
 
 kv:
   - name: watchhive-cache
     plan: free
-    region: singapore
