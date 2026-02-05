@@ -1,10 +1,12 @@
+version: 1
+
 services:
-  # Backend API (Standard Node.js Web Service)
+  # Backend API
   - type: web
     name: watchhive-api
     env: node
     plan: free
-    region: singapore # Change to your preferred region
+    region: singapore
     buildCommand: cd server && npm install && npm run build && npx prisma generate
     startCommand: cd server && npx prisma migrate deploy && npm run start
     healthCheckPath: /health
@@ -19,7 +21,7 @@ services:
           property: connectionString
       - key: REDIS_URL
         fromService:
-          type: redis
+          type: keyvalue
           name: watchhive-cache
           property: connectionString
       - key: JWT_SECRET
@@ -27,17 +29,17 @@ services:
       - key: JWT_REFRESH_SECRET
         generateValue: true
       - key: TMDB_API_KEY
-        sync: false # Render will prompt the user for this value
+        sync: false
       - key: FRONTEND_URL
         fromService:
-          type: static_site
+          type: web
           name: watchhive-client
           property: url
 
-static_sites:
-  # Frontend Client (Static Site for Performance)
-  - name: watchhive-client
-    env: static
+  # Frontend Client
+  - type: web
+    name: watchhive-client
+    runtime: static
     plan: free
     region: singapore
     buildCommand: cd client && npm install && npm run build
@@ -50,10 +52,13 @@ static_sites:
           property: url
         suffix: /api/v1
 
+  # Redis Cache
+  - type: keyvalue
+    name: watchhive-cache
+    plan: free
+    region: singapore
+
 databases:
   - name: watchhive-db
     plan: free
-
-kv:
-  - name: watchhive-cache
-    plan: free
+    region: singapore
