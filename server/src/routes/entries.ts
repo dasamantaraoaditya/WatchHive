@@ -26,11 +26,12 @@ router.post(
     '/',
     authMiddleware,
     validateEntry,
-    async (req: Request, res: Response) => {
+    async (req: Request, res: Response): Promise<any> => {
         try {
             const errors = validationResult(req);
             if (!errors.isEmpty()) {
-                return res.status(400).json({ errors: errors.array() });
+                res.status(400).json({ errors: errors.array() });
+                return;
             }
 
             const userId = (req as any).user.userId;
@@ -92,7 +93,7 @@ router.post(
 // ============================================
 // GET ALL ENTRIES (with filters)
 // ============================================
-router.get('/', authMiddleware, async (req: Request, res: Response) => {
+router.get('/', authMiddleware, async (req: Request, res: Response): Promise<any> => {
     try {
         const userId = (req as any).user.userId;
         const {
@@ -181,11 +182,12 @@ router.get(
     '/:id',
     authMiddleware,
     param('id').isUUID().withMessage('Invalid entry ID'),
-    async (req: Request, res: Response) => {
+    async (req: Request, res: Response): Promise<any> => {
         try {
             const errors = validationResult(req);
             if (!errors.isEmpty()) {
-                return res.status(400).json({ errors: errors.array() });
+                res.status(400).json({ errors: errors.array() });
+                return;
             }
 
             const { id } = req.params;
@@ -263,11 +265,12 @@ router.put(
         body('isRewatch').optional().isBoolean().withMessage('isRewatch must be boolean'),
         body('watchLocation').optional().trim(),
     ],
-    async (req: Request, res: Response) => {
+    async (req: Request, res: Response): Promise<any> => {
         try {
             const errors = validationResult(req);
             if (!errors.isEmpty()) {
-                return res.status(400).json({ errors: errors.array() });
+                res.status(400).json({ errors: errors.array() });
+                return;
             }
 
             const { id } = req.params;
@@ -325,11 +328,12 @@ router.delete(
     '/:id',
     authMiddleware,
     param('id').isUUID().withMessage('Invalid entry ID'),
-    async (req: Request, res: Response) => {
+    async (req: Request, res: Response): Promise<any> => {
         try {
             const errors = validationResult(req);
             if (!errors.isEmpty()) {
-                return res.status(400).json({ errors: errors.array() });
+                res.status(400).json({ errors: errors.array() });
+                return;
             }
 
             const { id } = req.params;
@@ -362,7 +366,7 @@ router.delete(
 // ============================================
 // GET ENTRY STATISTICS
 // ============================================
-router.get('/stats/summary', authMiddleware, async (req: Request, res: Response) => {
+router.get('/stats/summary', authMiddleware, async (req: Request, res: Response): Promise<any> => {
     try {
         const userId = (req as any).user.userId;
 

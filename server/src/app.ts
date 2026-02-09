@@ -33,12 +33,8 @@ if (config.nodeEnv === 'development') {
 }
 
 // Health check
-app.get('/health', (req, res) => {
-    res.status(200).json({
-        status: 'healthy',
-        timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
-    });
+app.get('/health', (_req, res) => {
+    res.json({ status: 'ok', environment: config.nodeEnv });
 });
 
 // API routes

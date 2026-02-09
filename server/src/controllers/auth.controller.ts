@@ -48,7 +48,7 @@ export const authController = {
         }
     },
 
-    async logout(req: Request, res: Response): Promise<void> {
+    async logout(_req: Request, res: Response): Promise<void> {
         // For JWT, logout is handled client-side by removing tokens
         // In future, we could implement token blacklisting with Redis
         res.status(200).json({ message: 'Logged out successfully' });
