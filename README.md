@@ -227,25 +227,15 @@ WatchHive/
 
 ---
 
-## 🚀 Deployment
-
-### Frontend
-Deploy to Vercel, Netlify, or similar:
+### Full-Stack (Frontend & Backend)
+Deploy both to **Vercel** (Recommended):
 ```bash
-cd client
-npm run build
-# Deploy the dist/ folder
+# From root
+vercel
 ```
 
-### Backend
-Deploy to Railway, Render, or similar:
-```bash
-cd server
-npm run build
-# Deploy with DATABASE_URL and other env vars
-```
-
-See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed instructions.
+See [VERCEL_DEPLOYMENT.md](./VERCEL_DEPLOYMENT.md) for detailed instructions.
+For other platforms, see [DEPLOYMENT.md](./docs/setup/DEPLOYMENT.md).
 
 ---
 

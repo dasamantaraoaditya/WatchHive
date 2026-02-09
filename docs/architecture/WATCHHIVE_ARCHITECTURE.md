@@ -1135,13 +1135,12 @@ backend/tests/
 ### Backend Deployment
 
 **Options**:
+- Vercel (Serverless Functions)
 - Railway
-- Render
 - DigitalOcean
 - Heroku
 - Docker/Self-hosted
 - AWS EC2
-- Heroku
 
 **Deployment Steps**:
 1. Set up production database

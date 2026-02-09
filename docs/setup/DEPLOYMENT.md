@@ -4,41 +4,23 @@ This guide covers various deployment options for your full-stack WatchHive appli
 
 ## 🚀 Quick Deployment Options
 
-### Option 1: Railway (Full-Stack Deployment)
+### Option 1: Vercel (Recommended - Full-Stack)
 
-Railway is perfect for deploying both frontend and backend together.
+Vercel is excellent for both the Vite frontend and the Node.js/Express backend (as serverless functions).
 
-1. **Sign up at [Railway.app](https://railway.app)**
-2. **Connect your GitHub repository**
-3. **Configure Build Settings:**
-   - Root Directory: `/`
-   - Build Command: `cd client && npm install && npm run build`
-   - Start Command: `cd server && npm install && npm start`
-4. **Set Environment Variables:**
-   - `PORT` (Railway provides this automatically)
-   - `NODE_ENV=production`
-5. **Deploy!**
+**Frontend & Backend Deployment:**
+1. Install Vercel CLI: `npm i -g vercel`
+2. Connect your GitHub repository to Vercel.
+3. Vercel will auto-detect the monorepo structure.
+4. Set the following environment variables:
+   - `DATABASE_URL`: Your PostgreSQL connection string
+   - `JWT_SECRET`: A secure random string
+   - `JWT_REFRESH_SECRET`: Another secure random string
+   - `TMDB_API_KEY`: Your TMDB API key
+   - `NODE_ENV`: production
+5. Deploy!
 
-### Option 2: Render (Free Tier Available)
-
-**Backend Deployment:**
-1. Create a new Web Service on [Render](https://render.com)
-2. Connect your repository
-3. Configure:
-   - Root Directory: `server`
-   - Build Command: `npm install`
-   - Start Command: `npm start`
-4. Add environment variables
-5. Deploy
-
-**Frontend Deployment:**
-1. Create a new Static Site
-2. Configure:
-   - Root Directory: `client`
-   - Build Command: `npm install && npm run build`
-   - Publish Directory: `dist`
-3. Add environment variable for API URL
-4. Deploy
+### Option 2: Railway (Alternative Full-Stack)
 
 ### Option 3: Heroku
 
@@ -129,7 +111,7 @@ const API_URL = import.meta.env.VITE_API_URL || '/api'
 
 ## 💡 Tips
 
-- **Free Tiers:** Render and Railway offer free tiers perfect for this app
+- **Free Tiers:** Vercel and Railway offer free tiers perfect for this app
 - **Custom Domains:** Most platforms support custom domains
 - **Auto-Deploy:** Set up automatic deployments from your main branch
 - **Staging Environment:** Create a separate deployment for testing
@@ -152,4 +134,4 @@ const API_URL = import.meta.env.VITE_API_URL || '/api'
 
 ---
 
-Choose the deployment option that best fits your needs. Railway and Render are great for beginners!
+Choose the deployment option that best fits your needs. Vercel and Railway are great for beginners!
