@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { entriesApi, CreateEntryData, UpdateEntryData, Entry } from '../../services/entries.service';
+import { entriesApi, CreateEntryData, Entry } from '../../services/entries.service';
 import './EntryForm.css';
 
 interface EntryFormProps {

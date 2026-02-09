@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
-import tmdbService from '../services/tmdb.service';
-import { authMiddleware } from '../middleware/auth.middleware';
+import tmdbService from '../services/tmdb.service.js';
+import { authMiddleware } from '../middleware/auth.middleware.js';
 
 const router = Router();
 
