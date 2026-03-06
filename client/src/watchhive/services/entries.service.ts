@@ -1,56 +1,4 @@
-import axios from 'axios';
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001/api/v1';
-
-// Create axios instance with default config
-const apiClient = axios.create({
-    baseURL: API_BASE_URL,
-    headers: {
-        'Content-Type': 'application/json',
-    },
-});
-
-// Add auth token to requests
-apiClient.interceptors.request.use((config) => {
-    const token = localStorage.getItem('accessToken');
-    if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
-    }
-    return config;
-});
-
-// Handle token refresh on 401
-apiClient.interceptors.response.use(
-    (response) => response,
-    async (error) => {
-        const originalRequest = error.config;
-
-        if (error.response?.status === 401 && !originalRequest._retry) {
-            originalRequest._retry = true;
-
-            try {
-                const refreshToken = localStorage.getItem('refreshToken');
-                const response = await axios.post(`${API_BASE_URL}/api/v1/auth/refresh`, {
-                    refreshToken,
-                });
-
-                const { accessToken } = response.data;
-                localStorage.setItem('accessToken', accessToken);
-
-                originalRequest.headers.Authorization = `Bearer ${accessToken}`;
-                return apiClient(originalRequest);
-            } catch (refreshError) {
-                // Refresh failed, logout user
-                localStorage.removeItem('accessToken');
-                localStorage.removeItem('refreshToken');
-                window.location.href = '/watch-hive/login';
-                return Promise.reject(refreshError);
-            }
-        }
-
-        return Promise.reject(error);
-    }
-);
+import apiClient from './api.js';
 
 // Entry types
 export interface Entry {
@@ -137,26 +85,22 @@ export interface EntryStats {
 export const entriesApi = {
     // Create a new entry
     createEntry: async (data: CreateEntryData): Promise<Entry> => {
-        const response = await apiClient.post('/entries', data);
-        return response.data.entry;
+        return await apiClient.post<Entry>('/entries', data);
     },
 
     // Get all entries with filters
     getEntries: async (params?: GetEntriesParams): Promise<EntriesResponse> => {
-        const response = await apiClient.get('/entries', { params });
-        return response.data;
+        return await apiClient.get<EntriesResponse>('/entries', { params });
     },
 
     // Get a single entry
     getEntry: async (id: string): Promise<Entry> => {
-        const response = await apiClient.get(`/entries/${id}`);
-        return response.data.entry;
+        return await apiClient.get<Entry>(`/entries/${id}`);
     },
 
     // Update an entry
     updateEntry: async (id: string, data: UpdateEntryData): Promise<Entry> => {
-        const response = await apiClient.put(`/entries/${id}`, data);
-        return response.data.entry;
+        return await apiClient.put<Entry>(`/entries/${id}`, data);
     },
 
     // Delete an entry
@@ -166,8 +110,7 @@ export const entriesApi = {
 
     // Get entry statistics
     getStats: async (): Promise<EntryStats> => {
-        const response = await apiClient.get('/entries/stats/summary');
-        return response.data.stats;
+        return await apiClient.get<EntryStats>('/entries/stats/summary');
     },
 };
 

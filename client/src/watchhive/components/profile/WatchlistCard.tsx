@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { WatchlistButton } from '../common';
 import { useWatchlist } from '../../contexts/WatchlistContext';
 import { entriesApi, CreateEntryData } from '../../services/entries.service';
+import apiClient from '../../services/api.js';
 import './Profile.css';
 
 interface WatchlistCardProps {
@@ -20,15 +21,8 @@ export const WatchlistCard: React.FC<WatchlistCardProps> = ({ tmdbId, mediaType 
     useEffect(() => {
         const fetchDetails = async () => {
             try {
-                const token = localStorage.getItem('accessToken');
-                const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5001/api/v1';
                 const endpoint = mediaType === 'tv' ? 'tv' : 'movie';
-
-                const res = await fetch(`${API_BASE}/tmdb/${endpoint}/${tmdbId}`, {
-                    headers: token ? { Authorization: `Bearer ${token}` } : {},
-                });
-                if (!res.ok) throw new Error();
-                const data = await res.json();
+                const data = await apiClient.get(`/tmdb/${endpoint}/${tmdbId}`);
                 setDetails(data);
             } catch (err) {
                 console.error('Failed to load watchlist item', err);
@@ -52,15 +46,12 @@ export const WatchlistCard: React.FC<WatchlistCardProps> = ({ tmdbId, mediaType 
                 title: details.title || details.name,
                 type: mediaType === 'tv' ? 'TV_SHOW' : 'MOVIE',
                 watchedAt: new Date().toISOString().split('T')[0],
-                // rating: undefined, // Don't send 0, validation requires 1-10
                 review: '',
                 tags: []
             };
 
             await entriesApi.createEntry(entryData);
-            await removeFromList(tmdbId); // This will update context and remove card
-
-            // Optional: better feedback via toast, but removed card is good enough for now
+            await removeFromList(tmdbId);
         } catch (error) {
             console.error('Failed to mark as watched', error);
             alert('Failed to mark as watched. Please try again.');
@@ -93,12 +84,10 @@ export const WatchlistCard: React.FC<WatchlistCardProps> = ({ tmdbId, mediaType 
                     <div className="watchlist-card__no-poster">Top Secret 🎬</div>
                 )}
 
-                {/* Overlay with Watchlist Toggle */}
                 <div className="watchlist-card__overlay">
                     <WatchlistButton tmdbId={tmdbId} mediaType={mediaType as any} variant="icon" />
                 </div>
 
-                {/* Mark as Watched Button overlay (bottom) */}
                 <div className="watchlist-card__hover-action">
                     <button
                         className="watchlist-mark-btn"

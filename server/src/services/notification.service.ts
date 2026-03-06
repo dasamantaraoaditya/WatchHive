@@ -1,5 +1,6 @@
-import prisma from '../utils/prisma.js';
-import { NotificationType } from '@prisma/client';
+import { db } from '../db/index.js';
+import { notifications } from '../db/schema.js';
+import { eq, and, desc, count } from 'drizzle-orm';
 
 export const notificationService = {
     /**
@@ -7,20 +8,20 @@ export const notificationService = {
      */
     createNotification: async (
         userId: string,
-        type: NotificationType,
+        type: any, // type will match the NotificationType enum from schema
         content: any
     ) => {
         try {
             // Don't notify yourself
             if (content.actorId === userId) return null;
 
-            return await prisma.notification.create({
-                data: {
-                    userId,
-                    type,
-                    content,
-                },
-            });
+            const [newNotification] = await db.insert(notifications).values({
+                userId,
+                type,
+                content,
+            }).returning();
+
+            return newNotification;
         } catch (error) {
             console.error('Error creating notification:', error);
             return null;
@@ -31,42 +32,45 @@ export const notificationService = {
      * Get user notifications
      */
     getNotifications: async (userId: string, page = 1, limit = 20) => {
-        const skip = (page - 1) * limit;
-        return await prisma.notification.findMany({
-            where: { userId },
-            orderBy: { createdAt: 'desc' },
-            skip,
-            take: limit,
-        });
+        const offset = (page - 1) * limit;
+        return await db
+            .select()
+            .from(notifications)
+            .where(eq(notifications.userId, userId))
+            .orderBy(desc(notifications.createdAt))
+            .limit(limit)
+            .offset(offset);
     },
 
     /**
      * Mark notification as read
      */
     markAsRead: async (notificationId: string, userId: string) => {
-        return await prisma.notification.updateMany({
-            where: { id: notificationId, userId },
-            data: { isRead: true },
-        });
+        return await db
+            .update(notifications)
+            .set({ isRead: true })
+            .where(and(eq(notifications.id, notificationId), eq(notifications.userId, userId)));
     },
 
     /**
      * Mark all notifications as read
      */
     markAllAsRead: async (userId: string) => {
-        return await prisma.notification.updateMany({
-            where: { userId, isRead: false },
-            data: { isRead: true },
-        });
+        return await db
+            .update(notifications)
+            .set({ isRead: true })
+            .where(and(eq(notifications.userId, userId), eq(notifications.isRead, false)));
     },
 
     /**
      * Get unread count
      */
     getUnreadCount: async (userId: string) => {
-        return await prisma.notification.count({
-            where: { userId, isRead: false },
-        });
+        const [result] = await db
+            .select({ value: count() })
+            .from(notifications)
+            .where(and(eq(notifications.userId, userId), eq(notifications.isRead, false)));
+        return result?.value || 0;
     }
 };
 

@@ -1,6 +1,9 @@
 import dotenv from 'dotenv';
 
-dotenv.config();
+// Only load .env file in development — production platforms inject env vars directly
+if (process.env.NODE_ENV !== 'production') {
+    dotenv.config();
+}
 
 export const config = {
     port: process.env.PORT || 5001,

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { entriesApi, Entry, GetEntriesParams } from '../../services/entries.service';
+import apiClient from '../../services/api.js';
 import { MovieCardSkeleton, ErrorState, EmptyState, Button, WatchlistButton } from '../common';
 import './EntryList.css';
 
@@ -71,14 +72,8 @@ const EntryCard: React.FC<{
 
         const fetchDetails = async () => {
             try {
-                const token = localStorage.getItem('accessToken');
-                const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5001/api/v1';
                 const endpoint = entry.type === 'TV_SHOW' ? 'tv' : 'movie';
-                const res = await fetch(`${API_BASE}/tmdb/${endpoint}/${entry.tmdbId}`, {
-                    headers: token ? { Authorization: `Bearer ${token}` } : {},
-                });
-                if (!res.ok) throw new Error();
-                const data = await res.json();
+                const data: any = await apiClient.get(`/tmdb/${endpoint}/${entry.tmdbId}`);
                 const parsed: TmdbDetails = {
                     poster_path: data.poster_path,
                     overview: data.overview || '',

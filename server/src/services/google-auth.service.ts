@@ -1,5 +1,7 @@
 import { OAuth2Client } from 'google-auth-library';
-import prisma from '../utils/prisma.js';
+import { db } from '../db/index.js';
+import { users } from '../db/schema.js';
+import { eq } from 'drizzle-orm';
 import {
     generateAccessToken,
     generateRefreshToken,
@@ -78,50 +80,53 @@ export const googleAuthService = {
         let isNewUser = false;
 
         // 1. Check if user already exists with this Google ID
-        let user = await prisma.user.findUnique({
-            where: { googleId: googlePayload.googleId },
-            select: {
-                id: true,
-                username: true,
-                email: true,
-                displayName: true,
-                profilePictureUrl: true,
-            },
-        });
+        let [user] = await db
+            .select({
+                id: users.id,
+                username: users.username,
+                email: users.email,
+                displayName: users.displayName,
+                profilePictureUrl: users.profilePictureUrl,
+            })
+            .from(users)
+            .where(eq(users.googleId, googlePayload.googleId))
+            .limit(1);
 
         if (!user) {
             // 2. Check if user exists with same email (registered via email/password)
-            const existingEmailUser = await prisma.user.findUnique({
-                where: { email: googlePayload.email },
-                select: {
-                    id: true,
-                    username: true,
-                    email: true,
-                    displayName: true,
-                    profilePictureUrl: true,
-                    googleId: true,
-                },
-            });
+            const [existingEmailUser] = await db
+                .select({
+                    id: users.id,
+                    username: users.username,
+                    email: users.email,
+                    displayName: users.displayName,
+                    profilePictureUrl: users.profilePictureUrl,
+                    googleId: users.googleId,
+                })
+                .from(users)
+                .where(eq(users.email, googlePayload.email))
+                .limit(1);
 
             if (existingEmailUser) {
                 // Link Google account to existing user
-                user = await prisma.user.update({
-                    where: { id: existingEmailUser.id },
-                    data: {
+                const [updatedUser] = await db
+                    .update(users)
+                    .set({
                         googleId: googlePayload.googleId,
                         // Update profile picture if not set
                         ...(googlePayload.picture && !existingEmailUser.profilePictureUrl
                             ? { profilePictureUrl: googlePayload.picture }
                             : {}),
-                    },
-                    select: {
-                        id: true,
-                        username: true,
-                        email: true,
-                        displayName: true,
-                        profilePictureUrl: true,
-                    },
-                });
+                    })
+                    .where(eq(users.id, existingEmailUser.id))
+                    .returning({
+                        id: users.id,
+                        username: users.username,
+                        email: users.email,
+                        displayName: users.displayName,
+                        profilePictureUrl: users.profilePictureUrl,
+                    });
+                user = updatedUser;
             } else {
                 // 3. Create a new user
                 isNewUser = true;
@@ -136,28 +141,36 @@ export const googleAuthService = {
                 let counter = 1;
 
                 // Ensure unique username
-                while (await prisma.user.findUnique({ where: { username } })) {
+                while (true) {
+                    const [existing] = await db
+                        .select()
+                        .from(users)
+                        .where(eq(users.username, username))
+                        .limit(1);
+                    if (!existing) break;
+
                     username = `${baseUsername}_${counter}`;
                     counter++;
                 }
 
-                user = await prisma.user.create({
-                    data: {
+                const [newUser] = await db
+                    .insert(users)
+                    .values({
                         username,
                         email: googlePayload.email,
                         googleId: googlePayload.googleId,
                         displayName: googlePayload.name,
                         profilePictureUrl: googlePayload.picture || null,
                         // No passwordHash — this is a Google-only user
-                    },
-                    select: {
-                        id: true,
-                        username: true,
-                        email: true,
-                        displayName: true,
-                        profilePictureUrl: true,
-                    },
-                });
+                    })
+                    .returning({
+                        id: users.id,
+                        username: users.username,
+                        email: users.email,
+                        displayName: users.displayName,
+                        profilePictureUrl: users.profilePictureUrl,
+                    });
+                user = newUser;
             }
         }
 

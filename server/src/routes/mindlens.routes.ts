@@ -1,6 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { authMiddleware } from '../middleware/auth.middleware.js';
-import prisma from '../utils/prisma.js';
+import { db } from '../db/index.js';
+import { entries } from '../db/schema.js';
+import { eq, desc } from 'drizzle-orm';
 
 const router = Router();
 
@@ -151,30 +153,22 @@ router.get('/insights', authMiddleware, async (req: Request, res: Response): Pro
         const userId = req.user!.userId;
 
         // Fetch last 100 entries for analysis
-        const entries = await prisma.entry.findMany({
-            where: { userId },
-            orderBy: { watchedAt: 'desc' },
-            take: 100,
-            select: {
-                id: true,
-                title: true,
-                type: true,
-                watchedAt: true,
-                tags: true,
-                rating: true,
-                tmdbId: true, // In a real app we'd fetch genres from TMDb if not stored, 
-                // assuming tags might contain genres or we infer for now from type/tags if available.
-                // For MVP, we will rely on 'tags' if user added them, OR basic type assumptions.
-                // Actually, Entry model has 'tags' string array. 
-                // Since we don't store Genre IDs in Entry model explicitly (based on schema), 
-                // we might need to fetch them or assume tags are genres.
-                // Let's assume tags often contain genres or we use a fallback if possible.
-                // Wait, 'tags' are user defined. 
-                // Use 'tags' effectively. If empty, analysis is limited.
-            }
-        });
+        const userEntries = await db
+            .select({
+                id: entries.id,
+                title: entries.title,
+                type: entries.type,
+                watchedAt: entries.watchedAt,
+                tags: entries.tags,
+                rating: entries.rating,
+                tmdbId: entries.tmdbId,
+            })
+            .from(entries)
+            .where(eq(entries.userId, userId))
+            .orderBy(desc(entries.watchedAt))
+            .limit(100);
 
-        if (entries.length < 5) {
+        if (userEntries.length < 5) {
             res.json({
                 hasEnoughData: false,
                 message: "Need more watch history to generate insights."
@@ -191,7 +185,7 @@ router.get('/insights', authMiddleware, async (req: Request, res: Response): Pro
         // Helper to simplify genre matching
         const normalize = (s: string) => s.toLowerCase().trim();
 
-        entries.forEach(entry => {
+        userEntries.forEach(entry => {
             if (entry.tags && Array.isArray(entry.tags)) {
                 entry.tags.forEach(tag => {
                     // Match tag to known genres
@@ -209,8 +203,7 @@ router.get('/insights', authMiddleware, async (req: Request, res: Response): Pro
             }
         });
 
-        // 2. Temporal Analysis (Time of Day of Watch - if reliable)
-        // Note: watchedAt might be date only or full timestamp. Schema says DateTime.
+        // 2. Temporal Analysis (Time of Day of Watch)
         const timeOfDay = {
             morning: 0,   // 5-12
             afternoon: 0, // 12-17
@@ -218,7 +211,7 @@ router.get('/insights', authMiddleware, async (req: Request, res: Response): Pro
             night: 0      // 22-5
         };
 
-        entries.forEach(entry => {
+        userEntries.forEach(entry => {
             const hour = new Date(entry.watchedAt).getHours();
             if (hour >= 5 && hour < 12) timeOfDay.morning++;
             else if (hour >= 12 && hour < 17) timeOfDay.afternoon++;
@@ -244,9 +237,9 @@ router.get('/insights', authMiddleware, async (req: Request, res: Response): Pro
             }
         }
 
-        if (timeOfDay.night > (entries.length * 0.4)) {
+        if (timeOfDay.night > (userEntries.length * 0.4)) {
             insights.push("High late-night activity detected. You might be a 'Revenge Bedtime Procrastinator', reclaiming personal time at night.");
-        } else if (timeOfDay.morning > (entries.length * 0.3)) {
+        } else if (timeOfDay.morning > (userEntries.length * 0.3)) {
             insights.push("You start your day with content, possibly integrating entertainment into your morning routine for motivation.");
         }
 
@@ -276,7 +269,7 @@ router.get('/insights', authMiddleware, async (req: Request, res: Response): Pro
         res.json({
             hasEnoughData: true,
             userProfile: {
-                totalEntries: entries.length,
+                totalEntries: userEntries.length,
                 primaryMood: topMoods[0] ? topMoods[0][0] : 'Balanced',
             },
             persona: {

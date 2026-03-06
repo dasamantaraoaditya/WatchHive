@@ -60,7 +60,7 @@ test_health_check() {
     body=$(echo "$response" | sed '$d')
     
     if [ "$http_code" = "200" ]; then
-        if echo "$body" | grep -q "healthy"; then
+        if echo "$body" | grep -q "ok"; then
             print_pass "Health check endpoint responding"
         else
             print_fail "Health check endpoint" "Invalid response body"

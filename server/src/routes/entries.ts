@@ -1,12 +1,12 @@
 import { Router, Request, Response } from 'express';
 import { body, param, validationResult } from 'express-validator';
-import { PrismaClient, EntryType } from '@prisma/client';
+import { db } from '../db/index.js';
+import { users, entries, follows, likes, comments } from '../db/schema.js';
+import { eq, and, desc, asc, count, sql, ilike, or, arrayContains, avg } from 'drizzle-orm';
 import { authMiddleware } from '../middleware/auth.middleware.js';
-
 import tmdbService from '../services/tmdb.service.js';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 // Validation middleware
 const validateEntry = [
@@ -69,40 +69,46 @@ router.post(
             }
 
             // Create entry
-            const entry = await prisma.entry.create({
-                data: {
-                    userId,
-                    tmdbId,
-                    title,
-                    type: type as EntryType,
-                    watchedAt: watchedAt ? new Date(watchedAt) : new Date(),
-                    rating: rating || null,
-                    review: review || null,
-                    tags: entryTags,
-                    isRewatch: isRewatch || false,
-                    watchLocation: watchLocation || null,
-                },
-                include: {
+            const [newEntry] = await db.insert(entries).values({
+                userId,
+                tmdbId,
+                title,
+                type: type as any,
+                watchedAt: watchedAt ? new Date(watchedAt) : new Date(),
+                rating: rating ? rating.toString() : null,
+                review: review || null,
+                tags: entryTags,
+                isRewatch: isRewatch || false,
+                watchLocation: watchLocation || null,
+            }).returning();
+
+            // Fetch fully populated entry for response
+            const entry = await db.query.entries.findFirst({
+                where: eq(entries.id, newEntry.id),
+                with: {
                     user: {
-                        select: {
+                        columns: {
                             id: true,
                             username: true,
                             displayName: true,
                             profilePictureUrl: true,
-                        },
-                    },
-                    _count: {
-                        select: {
-                            likes: true,
-                            comments: true,
-                        },
-                    },
-                },
+                        }
+                    }
+                }
             });
+
+            // Need to manually add counts due to Drizzle _count limitation in findFirst
+            const [[{ likesCount }], [{ commentsCount }]] = await Promise.all([
+                db.select({ likesCount: count() }).from(likes).where(eq(likes.entryId, newEntry.id)),
+                db.select({ commentsCount: count() }).from(comments).where(eq(comments.entryId, newEntry.id))
+            ]);
 
             res.status(201).json({
                 message: 'Entry created successfully',
-                entry,
+                entry: {
+                    ...entry,
+                    _count: { likes: likesCount, comments: commentsCount }
+                },
             });
         } catch (error) {
             console.error('Create entry error:', error);
@@ -135,24 +141,22 @@ router.get('/', authMiddleware, async (req: Request, res: Response): Promise<any
         if (queryUserId && queryUserId !== currentUserId) {
             targetUserId = queryUserId as string;
 
-            const targetUser = await prisma.user.findUnique({
-                where: { id: targetUserId },
-                select: { isPrivate: true }
-            });
+            const [targetUser] = await db
+                .select({ isPrivate: users.isPrivate })
+                .from(users)
+                .where(eq(users.id, targetUserId))
+                .limit(1);
 
             if (!targetUser) {
                 return res.status(404).json({ error: 'User not found' });
             }
 
             if (targetUser.isPrivate) {
-                const isFollowing = await prisma.follow.findUnique({
-                    where: {
-                        followerId_followingId: {
-                            followerId: currentUserId,
-                            followingId: targetUserId
-                        }
-                    }
-                });
+                const [isFollowing] = await db
+                    .select()
+                    .from(follows)
+                    .where(and(eq(follows.followerId, currentUserId), eq(follows.followingId, targetUserId)))
+                    .limit(1);
 
                 if (!isFollowing) {
                     return res.status(403).json({ error: 'This account is private. Follow to see entries.' });
@@ -161,65 +165,67 @@ router.get('/', authMiddleware, async (req: Request, res: Response): Promise<any
         }
 
         // Build filter conditions
-        const where: any = { userId: targetUserId };
+        const conditions: any[] = [eq(entries.userId, targetUserId)];
 
-        if (type) {
-            where.type = type as EntryType;
-        }
-
-        if (rating) {
-            where.rating = parseInt(rating as string);
-        }
-
-        if (tag) {
-            where.tags = {
-                has: tag as string,
-            };
-        }
-
+        if (type) conditions.push(eq(entries.type, type as any));
+        if (rating) conditions.push(eq(entries.rating, rating.toString()));
+        if (tag) conditions.push(arrayContains(entries.tags, [tag as string]));
         if (search) {
-            where.OR = [
-                { title: { contains: search as string, mode: 'insensitive' } },
-                { review: { contains: search as string, mode: 'insensitive' } },
-            ];
+            conditions.push(or(
+                ilike(entries.title, `%${search}%`),
+                ilike(entries.review, `%${search}%`)
+            ));
         }
 
-        // Get entries with pagination
-        const [entries, total] = await Promise.all([
-            prisma.entry.findMany({
-                where,
-                include: {
-                    user: {
-                        select: {
-                            id: true,
-                            username: true,
-                            displayName: true,
-                            profilePictureUrl: true,
-                        },
-                    },
-                    _count: {
-                        select: {
-                            likes: true,
-                            comments: true,
-                        },
-                    },
+        const whereClause = conditions.length > 1 ? and(...conditions) : conditions[0];
+
+        // Get entries with pagination and manual counts
+        const [entriesList, [{ total }]] = await Promise.all([
+            db.select({
+                id: entries.id,
+                userId: entries.userId,
+                tmdbId: entries.tmdbId,
+                title: entries.title,
+                type: entries.type,
+                watchedAt: entries.watchedAt,
+                rating: entries.rating,
+                review: entries.review,
+                tags: entries.tags,
+                isRewatch: entries.isRewatch,
+                watchLocation: entries.watchLocation,
+                createdAt: entries.createdAt,
+                updatedAt: entries.updatedAt,
+                user: {
+                    id: users.id,
+                    username: users.username,
+                    displayName: users.displayName,
+                    profilePictureUrl: users.profilePictureUrl
                 },
-                orderBy: {
-                    [sortBy as string]: order === 'asc' ? 'asc' : 'desc',
-                },
-                take: parseInt(limit as string),
-                skip: parseInt(offset as string),
-            }),
-            prisma.entry.count({ where }),
+                likesCount: sql<number>`(SELECT count(*) FROM "Like" WHERE "Like"."entryId" = ${entries.id})`.mapWith(Number),
+                commentsCount: sql<number>`(SELECT count(*) FROM "Comment" WHERE "Comment"."entryId" = ${entries.id})`.mapWith(Number)
+            })
+                .from(entries)
+                .innerJoin(users, eq(entries.userId, users.id))
+                .where(whereClause)
+                .orderBy(order === 'asc' ? asc(entries[sortBy as keyof typeof entries] as any) : desc(entries[sortBy as keyof typeof entries] as any))
+                .limit(parseInt(limit as string))
+                .offset(parseInt(offset as string)),
+            db.select({ total: count() }).from(entries).where(whereClause)
         ]);
 
+        // Map Drizzle result to Prisma-like structure for frontend compatibility
+        const formattedEntries = entriesList.map(e => ({
+            ...e,
+            _count: { likes: e.likesCount, comments: e.commentsCount }
+        }));
+
         res.json({
-            entries,
+            entries: formattedEntries,
             pagination: {
                 total,
                 limit: parseInt(limit as string),
                 offset: parseInt(offset as string),
-                hasMore: parseInt(offset as string) + entries.length < total,
+                hasMore: parseInt(offset as string) + entriesList.length < total,
             },
         });
     } catch (error) {
@@ -246,54 +252,54 @@ router.get(
             const { id } = req.params;
             const userId = (req as any).user.userId;
 
-            const entry = await prisma.entry.findFirst({
-                where: {
-                    id,
-                    userId, // Ensure user can only access their own entries
-                },
-                include: {
+            const entry = await db.query.entries.findFirst({
+                where: and(eq(entries.id, id), eq(entries.userId, userId)),
+                with: {
                     user: {
-                        select: {
+                        columns: {
                             id: true,
                             username: true,
                             displayName: true,
                             profilePictureUrl: true,
-                        },
+                        }
                     },
                     likes: {
-                        select: {
-                            userId: true,
-                        },
+                        columns: {
+                            userId: true
+                        }
                     },
                     comments: {
-                        include: {
+                        orderBy: desc(comments.createdAt),
+                        with: {
                             user: {
-                                select: {
+                                columns: {
                                     id: true,
                                     username: true,
                                     displayName: true,
                                     profilePictureUrl: true,
-                                },
-                            },
-                        },
-                        orderBy: {
-                            createdAt: 'desc',
-                        },
-                    },
-                    _count: {
-                        select: {
-                            likes: true,
-                            comments: true,
-                        },
-                    },
-                },
+                                }
+                            }
+                        }
+                    }
+                }
             });
 
             if (!entry) {
                 return res.status(404).json({ error: 'Entry not found' });
             }
 
-            res.json({ entry });
+            // Manually add counts
+            const [[{ likesCount }], [{ commentsCount }]] = await Promise.all([
+                db.select({ likesCount: count() }).from(likes).where(eq(likes.entryId, id)),
+                db.select({ commentsCount: count() }).from(comments).where(eq(comments.entryId, id))
+            ]);
+
+            res.json({
+                entry: {
+                    ...entry,
+                    _count: { likes: likesCount, comments: commentsCount }
+                }
+            });
         } catch (error) {
             console.error('Get entry error:', error);
             res.status(500).json({ error: 'Failed to fetch entry' });
@@ -330,42 +336,52 @@ router.put(
             const userId = (req as any).user.userId;
 
             // Check if entry exists and belongs to user
-            const existingEntry = await prisma.entry.findFirst({
-                where: { id, userId },
-            });
+            const [existingEntry] = await db
+                .select()
+                .from(entries)
+                .where(and(eq(entries.id, id), eq(entries.userId, userId)))
+                .limit(1);
 
             if (!existingEntry) {
                 return res.status(404).json({ error: 'Entry not found' });
             }
 
             // Update entry
-            const updatedEntry = await prisma.entry.update({
-                where: { id },
-                data: {
-                    ...req.body,
-                    watchedAt: req.body.watchedAt ? new Date(req.body.watchedAt) : undefined,
-                },
-                include: {
+            const updateData = { ...req.body };
+            if (updateData.watchedAt) updateData.watchedAt = new Date(updateData.watchedAt);
+            if (updateData.rating) updateData.rating = updateData.rating.toString();
+
+            await db
+                .update(entries)
+                .set({ ...updateData, updatedAt: new Date() })
+                .where(eq(entries.id, id));
+
+            // Fetch fully populated updated entry
+            const entry = await db.query.entries.findFirst({
+                where: eq(entries.id, id),
+                with: {
                     user: {
-                        select: {
+                        columns: {
                             id: true,
                             username: true,
                             displayName: true,
                             profilePictureUrl: true,
-                        },
-                    },
-                    _count: {
-                        select: {
-                            likes: true,
-                            comments: true,
-                        },
-                    },
-                },
+                        }
+                    }
+                }
             });
+
+            const [[{ likesCount }], [{ commentsCount }]] = await Promise.all([
+                db.select({ likesCount: count() }).from(likes).where(eq(likes.entryId, id)),
+                db.select({ commentsCount: count() }).from(comments).where(eq(comments.entryId, id))
+            ]);
 
             res.json({
                 message: 'Entry updated successfully',
-                entry: updatedEntry,
+                entry: {
+                    ...entry,
+                    _count: { likes: likesCount, comments: commentsCount }
+                },
             });
         } catch (error) {
             console.error('Update entry error:', error);
@@ -393,18 +409,18 @@ router.delete(
             const userId = (req as any).user.userId;
 
             // Check if entry exists and belongs to user
-            const existingEntry = await prisma.entry.findFirst({
-                where: { id, userId },
-            });
+            const [existingEntry] = await db
+                .select()
+                .from(entries)
+                .where(and(eq(entries.id, id), eq(entries.userId, userId)))
+                .limit(1);
 
             if (!existingEntry) {
                 return res.status(404).json({ error: 'Entry not found' });
             }
 
-            // Delete entry (cascading deletes will handle likes and comments)
-            await prisma.entry.delete({
-                where: { id },
-            });
+            // Delete entry (cascading deletes handled by DB)
+            await db.delete(entries).where(eq(entries.id, id));
 
             res.json({
                 message: 'Entry deleted successfully',
@@ -424,20 +440,17 @@ router.get('/stats/summary', authMiddleware, async (req: Request, res: Response)
         const userId = (req as any).user.userId;
 
         const [
-            totalEntries,
-            movieCount,
-            tvShowCount,
-            averageRating,
-            totalWatchTime,
+            [{ totalEntries }],
+            [{ movieCount }],
+            [{ tvShowCount }],
+            [{ avgRating }],
+            [{ totalWatchTime }] // Still placeholder
         ] = await Promise.all([
-            prisma.entry.count({ where: { userId } }),
-            prisma.entry.count({ where: { userId, type: 'MOVIE' } }),
-            prisma.entry.count({ where: { userId, type: 'TV_SHOW' } }),
-            prisma.entry.aggregate({
-                where: { userId, rating: { not: null } },
-                _avg: { rating: true },
-            }),
-            prisma.entry.count({ where: { userId } }), // Placeholder for watch time
+            db.select({ totalEntries: count() }).from(entries).where(eq(entries.userId, userId)),
+            db.select({ movieCount: count() }).from(entries).where(and(eq(entries.userId, userId), eq(entries.type, 'MOVIE' as any))),
+            db.select({ tvShowCount: count() }).from(entries).where(and(eq(entries.userId, userId), eq(entries.type, 'TV_SHOW' as any))),
+            db.select({ avgRating: avg(entries.rating) }).from(entries).where(eq(entries.userId, userId)),
+            db.select({ totalWatchTime: count() }).from(entries).where(eq(entries.userId, userId)),
         ]);
 
         res.json({
@@ -445,9 +458,9 @@ router.get('/stats/summary', authMiddleware, async (req: Request, res: Response)
                 totalEntries,
                 movieCount,
                 tvShowCount,
-                episodeCount: totalEntries - movieCount - tvShowCount,
-                averageRating: averageRating._avg.rating || 0,
-                totalWatchTime, // This would need actual duration data
+                episodeCount: (totalEntries || 0) - (movieCount || 0) - (tvShowCount || 0),
+                averageRating: parseFloat((avgRating as any) || 0),
+                totalWatchTime,
             },
         });
     } catch (error) {

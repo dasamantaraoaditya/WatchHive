@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { entriesApi, CreateEntryData, Entry } from '../../services/entries.service';
+import apiClient from '../../services/api.js';
 import './EntryForm.css';
 
 interface EntryFormProps {
@@ -145,13 +146,7 @@ export const EntryForm: React.FC<EntryFormProps> = ({ entry, onSuccess, onCancel
         }
         setIsSearching(true);
         try {
-            const token = localStorage.getItem('accessToken');
-            const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5001/api/v1';
-            const res = await fetch(`${API_BASE}/tmdb/search/multi?query=${encodeURIComponent(q)}`, {
-                headers: token ? { Authorization: `Bearer ${token}` } : {},
-            });
-            if (!res.ok) throw new Error();
-            const data = await res.json();
+            const data: any = await apiClient.get(`/tmdb/search/multi?query=${encodeURIComponent(q)}`);
             // TMDB multi returns `results` array
             const results: TmdbResult[] = (data.results || [])
                 .filter((r: any) => r.media_type === 'movie' || r.media_type === 'tv')

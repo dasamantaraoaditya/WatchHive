@@ -45,13 +45,22 @@ if (config.nodeEnv === 'development') {
     app.use(morgan('dev'));
 }
 
+import { checkDbHealth } from './db/index.js';
+
 // Health check
-app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', environment: config.nodeEnv });
+app.get('/health', async (_req, res) => {
+    const isDbHealthy = await checkDbHealth();
+    res.json({
+        status: isDbHealthy ? 'ok' : 'error',
+        database: isDbHealthy ? 'connected' : 'disconnected',
+        environment: config.nodeEnv
+    });
 });
 
-// Serve uploaded files statically
-app.use('/uploads', express.static(path.resolve(__dirname, '../uploads')));
+// Serve uploaded files statically (Keep for local dev if needed, otherwise rely on S3)
+if (process.env.NODE_ENV === 'development') {
+    app.use('/uploads', express.static(path.resolve(__dirname, '../uploads')));
+}
 
 // API routes
 app.use('/api/v1/auth', authRoutes);

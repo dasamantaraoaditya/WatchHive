@@ -1,8 +1,9 @@
 import { Router, Request, Response } from 'express';
 import { authMiddleware } from '../middleware/auth.middleware.js';
-import prisma from '../utils/prisma.js';
+import { db } from '../db/index.js';
+import { users, follows, followRequests } from '../db/schema.js';
+import { eq, and, desc, count } from 'drizzle-orm';
 import notificationService from '../services/notification.service.js';
-import { NotificationType } from '@prisma/client';
 
 const router = Router();
 
@@ -21,9 +22,11 @@ router.post('/:userId', authMiddleware, async (req: Request, res: Response): Pro
             return;
         }
 
-        const userToFollow = await prisma.user.findUnique({
-            where: { id: followingId },
-        });
+        const [userToFollow] = await db
+            .select()
+            .from(users)
+            .where(eq(users.id, followingId))
+            .limit(1);
 
         if (!userToFollow) {
             res.status(404).json({ error: 'User not found' });
@@ -31,9 +34,11 @@ router.post('/:userId', authMiddleware, async (req: Request, res: Response): Pro
         }
 
         // 1. Check if already following
-        const existingFollow = await prisma.follow.findUnique({
-            where: { followerId_followingId: { followerId, followingId } },
-        });
+        const [existingFollow] = await db
+            .select()
+            .from(follows)
+            .where(and(eq(follows.followerId, followerId), eq(follows.followingId, followingId)))
+            .limit(1);
 
         if (existingFollow) {
             res.status(400).json({ error: 'You are already following this user' });
@@ -41,28 +46,35 @@ router.post('/:userId', authMiddleware, async (req: Request, res: Response): Pro
         }
 
         // 2. Check if there's a pending request
-        const existingRequest = await prisma.followRequest.findUnique({
-            where: { senderId_recipientId: { senderId: followerId, recipientId: followingId } }
-        });
+        const [existingRequest] = await db
+            .select()
+            .from(followRequests)
+            .where(and(eq(followRequests.senderId, followerId), eq(followRequests.recipientId, followingId)))
+            .limit(1);
 
         if (existingRequest) {
             if (existingRequest.status === 'pending') {
                 res.status(400).json({ error: 'Follow request already pending' });
                 return;
             }
-            await prisma.followRequest.delete({ where: { id: existingRequest.id } });
+            await db.delete(followRequests).where(eq(followRequests.id, existingRequest.id));
         }
 
-        const actor = await prisma.user.findUnique({ where: { id: followerId }, select: { username: true, displayName: true } });
+        const [actor] = await db
+            .select({ username: users.username, displayName: users.displayName })
+            .from(users)
+            .where(eq(users.id, followerId))
+            .limit(1);
         const actorName = actor?.displayName || actor?.username || 'Someone';
 
         // 3. Handle Private vs Public
         if (userToFollow.isPrivate) {
-            const request = await prisma.followRequest.create({
-                data: { senderId: followerId, recipientId: followingId }
-            });
+            const [request] = await db
+                .insert(followRequests)
+                .values({ senderId: followerId, recipientId: followingId })
+                .returning();
 
-            await notificationService.createNotification(followingId, NotificationType.FOLLOW_REQUEST, {
+            await notificationService.createNotification(followingId, 'FOLLOW_REQUEST', {
                 actorId: followerId,
                 actorName,
                 requestId: request.id
@@ -70,21 +82,33 @@ router.post('/:userId', authMiddleware, async (req: Request, res: Response): Pro
 
             res.status(201).json({ message: 'Follow request sent', status: 'requested' });
         } else {
-            const follow = await prisma.follow.create({
-                data: { followerId, followingId },
-                include: {
-                    following: {
-                        select: { id: true, username: true, displayName: true, profilePictureUrl: true }
-                    }
-                }
-            });
+            const [follow] = await db
+                .insert(follows)
+                .values({ followerId, followingId })
+                .returning();
 
-            await notificationService.createNotification(followingId, NotificationType.FOLLOW, {
+            // Fetch following details for response parity
+            const [followingDetails] = await db
+                .select({
+                    id: users.id,
+                    username: users.username,
+                    displayName: users.displayName,
+                    profilePictureUrl: users.profilePictureUrl
+                })
+                .from(users)
+                .where(eq(users.id, followingId))
+                .limit(1);
+
+            await notificationService.createNotification(followingId, 'FOLLOW', {
                 actorId: followerId,
                 actorName
             });
 
-            res.status(201).json({ message: 'Successfully followed user', follow, status: 'following' });
+            res.status(201).json({
+                message: 'Successfully followed user',
+                follow: { ...follow, following: followingDetails },
+                status: 'following'
+            });
         }
     } catch (error) {
         console.error('Error following user:', error);
@@ -101,23 +125,27 @@ router.post('/requests/:requestId/accept', authMiddleware, async (req: Request, 
         const { requestId } = req.params;
         const userId = req.user!.userId;
 
-        const request = await prisma.followRequest.findUnique({
-            where: { id: requestId },
-        });
+        const [request] = await db
+            .select()
+            .from(followRequests)
+            .where(eq(followRequests.id, requestId))
+            .limit(1);
 
         if (!request || request.recipientId !== userId) {
             res.status(404).json({ error: 'Request not found' });
             return;
         }
 
-        await prisma.follow.create({
-            data: { followerId: request.senderId, followingId: userId }
-        });
+        await db.insert(follows).values({ followerId: request.senderId, followingId: userId });
+        await db.delete(followRequests).where(eq(followRequests.id, requestId));
 
-        await prisma.followRequest.delete({ where: { id: requestId } });
+        const [recipient] = await db
+            .select({ username: users.username, displayName: users.displayName })
+            .from(users)
+            .where(eq(users.id, userId))
+            .limit(1);
 
-        const recipient = await prisma.user.findUnique({ where: { id: userId }, select: { username: true, displayName: true } });
-        await notificationService.createNotification(request.senderId, NotificationType.FOLLOW_ACCEPT, {
+        await notificationService.createNotification(request.senderId, 'FOLLOW_ACCEPT', {
             actorId: userId,
             actorName: recipient?.displayName || recipient?.username || 'Someone'
         });
@@ -137,14 +165,18 @@ router.post('/requests/:requestId/reject', authMiddleware, async (req: Request, 
         const { requestId } = req.params;
         const userId = req.user!.userId;
 
-        const request = await prisma.followRequest.findUnique({ where: { id: requestId } });
+        const [request] = await db
+            .select()
+            .from(followRequests)
+            .where(eq(followRequests.id, requestId))
+            .limit(1);
 
         if (!request || request.recipientId !== userId) {
             res.status(404).json({ error: 'Request not found' });
             return;
         }
 
-        await prisma.followRequest.delete({ where: { id: requestId } });
+        await db.delete(followRequests).where(eq(followRequests.id, requestId));
         res.json({ message: 'Follow request rejected' });
     } catch (error) {
         res.status(500).json({ error: 'Failed to reject' });
@@ -158,15 +190,25 @@ router.post('/requests/:requestId/reject', authMiddleware, async (req: Request, 
 router.get('/requests/pending', authMiddleware, async (req: Request, res: Response): Promise<void> => {
     try {
         const userId = req.user!.userId;
-        const requests = await prisma.followRequest.findMany({
-            where: { recipientId: userId, status: 'pending' },
-            include: {
+        const requests = await db
+            .select({
+                id: followRequests.id,
+                senderId: followRequests.senderId,
+                recipientId: followRequests.recipientId,
+                status: followRequests.status,
+                createdAt: followRequests.createdAt,
                 sender: {
-                    select: { id: true, username: true, displayName: true, profilePictureUrl: true }
+                    id: users.id,
+                    username: users.username,
+                    displayName: users.displayName,
+                    profilePictureUrl: users.profilePictureUrl
                 }
-            },
-            orderBy: { createdAt: 'desc' }
-        });
+            })
+            .from(followRequests)
+            .innerJoin(users, eq(followRequests.senderId, users.id))
+            .where(and(eq(followRequests.recipientId, userId), eq(followRequests.status, 'pending')))
+            .orderBy(desc(followRequests.createdAt));
+
         res.json(requests);
     } catch (error) {
         res.status(500).json({ error: 'Failed to fetch' });
@@ -182,22 +224,24 @@ router.delete('/:userId', authMiddleware, async (req: Request, res: Response): P
         const followingId = req.params.userId;
         const followerId = req.user!.userId;
 
-        await prisma.followRequest.deleteMany({
-            where: { senderId: followerId, recipientId: followingId }
-        });
+        await db
+            .delete(followRequests)
+            .where(and(eq(followRequests.senderId, followerId), eq(followRequests.recipientId, followingId)));
 
-        const existingFollow = await prisma.follow.findUnique({
-            where: { followerId_followingId: { followerId, followingId } },
-        });
+        const [existingFollow] = await db
+            .select()
+            .from(follows)
+            .where(and(eq(follows.followerId, followerId), eq(follows.followingId, followingId)))
+            .limit(1);
 
         if (!existingFollow) {
             res.status(404).json({ error: 'You are not following this user' });
             return;
         }
 
-        await prisma.follow.delete({
-            where: { followerId_followingId: { followerId, followingId } },
-        });
+        await db
+            .delete(follows)
+            .where(and(eq(follows.followerId, followerId), eq(follows.followingId, followingId)));
 
         res.json({ message: 'Successfully unfollowed user' });
     } catch (error) {
@@ -214,25 +258,27 @@ router.get('/:userId/followers', authMiddleware, async (req: Request, res: Respo
         const userId = req.params.userId;
         const page = parseInt(req.query.page as string, 10) || 1;
         const limit = parseInt(req.query.limit as string, 10) || 20;
-        const skip = (page - 1) * limit;
+        const offset = (page - 1) * limit;
 
-        const [followers, total] = await Promise.all([
-            prisma.follow.findMany({
-                where: { followingId: userId },
-                skip,
-                take: limit,
-                include: {
-                    follower: {
-                        select: { id: true, username: true, displayName: true, profilePictureUrl: true, createdAt: true },
-                    },
-                },
-                orderBy: { createdAt: 'desc' },
-            }),
-            prisma.follow.count({ where: { followingId: userId } }),
+        const [followersList, [{ total }]] = await Promise.all([
+            db.select({
+                id: users.id,
+                username: users.username,
+                displayName: users.displayName,
+                profilePictureUrl: users.profilePictureUrl,
+                createdAt: users.createdAt
+            })
+                .from(follows)
+                .innerJoin(users, eq(follows.followerId, users.id))
+                .where(eq(follows.followingId, userId))
+                .limit(limit)
+                .offset(offset)
+                .orderBy(desc(follows.createdAt)),
+            db.select({ total: count() }).from(follows).where(eq(follows.followingId, userId))
         ]);
 
         res.json({
-            followers: followers.map((f) => f.follower),
+            followers: followersList,
             pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
         });
     } catch (error) {
@@ -248,25 +294,27 @@ router.get('/:userId/following', authMiddleware, async (req: Request, res: Respo
         const userId = req.params.userId;
         const page = parseInt(req.query.page as string, 10) || 1;
         const limit = parseInt(req.query.limit as string, 10) || 20;
-        const skip = (page - 1) * limit;
+        const offset = (page - 1) * limit;
 
-        const [following, total] = await Promise.all([
-            prisma.follow.findMany({
-                where: { followerId: userId },
-                skip,
-                take: limit,
-                include: {
-                    following: {
-                        select: { id: true, username: true, displayName: true, profilePictureUrl: true, createdAt: true },
-                    },
-                },
-                orderBy: { createdAt: 'desc' },
-            }),
-            prisma.follow.count({ where: { followerId: userId } }),
+        const [followingList, [{ total }]] = await Promise.all([
+            db.select({
+                id: users.id,
+                username: users.username,
+                displayName: users.displayName,
+                profilePictureUrl: users.profilePictureUrl,
+                createdAt: users.createdAt
+            })
+                .from(follows)
+                .innerJoin(users, eq(follows.followingId, users.id))
+                .where(eq(follows.followerId, userId))
+                .limit(limit)
+                .offset(offset)
+                .orderBy(desc(follows.createdAt)),
+            db.select({ total: count() }).from(follows).where(eq(follows.followerId, userId))
         ]);
 
         res.json({
-            following: following.map((f) => f.following),
+            following: followingList,
             pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
         });
     } catch (error) {
@@ -282,13 +330,17 @@ router.get('/:userId/status', authMiddleware, async (req: Request, res: Response
         const followingId = req.params.userId;
         const followerId = req.user!.userId;
 
-        const follow = await prisma.follow.findUnique({
-            where: { followerId_followingId: { followerId, followingId } },
-        });
+        const [follow] = await db
+            .select()
+            .from(follows)
+            .where(and(eq(follows.followerId, followerId), eq(follows.followingId, followingId)))
+            .limit(1);
 
-        const request = await prisma.followRequest.findUnique({
-            where: { senderId_recipientId: { senderId: followerId, recipientId: followingId } }
-        });
+        const [request] = await db
+            .select()
+            .from(followRequests)
+            .where(and(eq(followRequests.senderId, followerId), eq(followRequests.recipientId, followingId)))
+            .limit(1);
 
         res.json({
             isFollowing: !!follow,
@@ -306,9 +358,12 @@ router.get('/:userId/status', authMiddleware, async (req: Request, res: Response
 router.get('/stats/:userId', authMiddleware, async (req: Request, res: Response): Promise<void> => {
     try {
         const userId = req.params.userId;
-        const [followersCount, followingCount] = await Promise.all([
-            prisma.follow.count({ where: { followingId: userId } }),
-            prisma.follow.count({ where: { followerId: userId } }),
+        const [
+            [{ followersCount }],
+            [{ followingCount }]
+        ] = await Promise.all([
+            db.select({ followersCount: count() }).from(follows).where(eq(follows.followingId, userId)),
+            db.select({ followingCount: count() }).from(follows).where(eq(follows.followerId, userId)),
         ]);
         res.json({ followersCount, followingCount });
     } catch (error) {

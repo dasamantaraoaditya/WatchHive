@@ -1,21 +1,4 @@
-import axios from 'axios';
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001/api/v1';
-
-const apiClient = axios.create({
-    baseURL: API_BASE_URL,
-    headers: {
-        'Content-Type': 'application/json',
-    },
-});
-
-apiClient.interceptors.request.use((config) => {
-    const token = localStorage.getItem('accessToken');
-    if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
-    }
-    return config;
-});
+import apiClient from './api.js';
 
 export interface ListItem {
     id: string;
@@ -39,13 +22,11 @@ export interface List {
 
 export const listsApi = {
     getWatchlist: async (): Promise<List> => {
-        const response = await apiClient.get('/lists/watchlist');
-        return response.data;
+        return await apiClient.get<List>('/lists/watchlist');
     },
 
     addToWatchlist: async (listId: string, tmdbId: number, mediaType: 'movie' | 'tv' = 'movie'): Promise<ListItem> => {
-        const response = await apiClient.post(`/lists/${listId}/items`, { tmdbId, mediaType });
-        return response.data;
+        return await apiClient.post<ListItem>(`/lists/${listId}/items`, { tmdbId, mediaType });
     },
 
     removeFromWatchlist: async (listId: string, tmdbId: number): Promise<void> => {

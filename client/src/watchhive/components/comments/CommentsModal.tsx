@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Avatar, Button, Input } from '../common';
+import { Avatar, Button, Input } from '../common';
 import { interactionService, Comment } from '../../services/interaction.service';
 import { useAuth } from '../../contexts';
 import './CommentsModal.css';

@@ -1,7 +1,5 @@
 import apiClient from './api';
-import { User, UserStats, UpdateUserData } from '../types';
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
+import { User, UpdateUserData } from '../types';
 
 export const userService = {
     async getMe(): Promise<User> {

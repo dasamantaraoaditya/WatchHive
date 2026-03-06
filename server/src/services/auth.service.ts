@@ -1,4 +1,6 @@
-import prisma from '../utils/prisma.js';
+import { db } from '../db/index.js';
+import { users } from '../db/schema.js';
+import { eq, or } from 'drizzle-orm';
 import { hashPassword, comparePassword } from '../utils/bcrypt.util.js';
 import {
     generateAccessToken,
@@ -34,11 +36,11 @@ export interface AuthResponse {
 export const authService = {
     async register(data: RegisterData): Promise<AuthResponse> {
         // Check if user already exists
-        const existingUser = await prisma.user.findFirst({
-            where: {
-                OR: [{ email: data.email }, { username: data.username }],
-            },
-        });
+        const [existingUser] = await db
+            .select()
+            .from(users)
+            .where(or(eq(users.email, data.email), eq(users.username, data.username)))
+            .limit(1);
 
         if (existingUser) {
             if (existingUser.email === data.email) {
@@ -51,21 +53,21 @@ export const authService = {
         const passwordHash = await hashPassword(data.password);
 
         // Create user
-        const user = await prisma.user.create({
-            data: {
+        const [user] = await db
+            .insert(users)
+            .values({
                 username: data.username,
                 email: data.email,
                 passwordHash,
                 displayName: data.displayName || data.username,
-            },
-            select: {
-                id: true,
-                username: true,
-                email: true,
-                displayName: true,
-                profilePictureUrl: true,
-            },
-        });
+            })
+            .returning({
+                id: users.id,
+                username: users.username,
+                email: users.email,
+                displayName: users.displayName,
+                profilePictureUrl: users.profilePictureUrl,
+            });
 
         // Generate tokens
         const accessToken = generateAccessToken({
@@ -86,17 +88,18 @@ export const authService = {
 
     async login(data: LoginData): Promise<AuthResponse> {
         // Find user
-        const user = await prisma.user.findUnique({
-            where: { email: data.email },
-            select: {
-                id: true,
-                username: true,
-                email: true,
-                displayName: true,
-                profilePictureUrl: true,
-                passwordHash: true,
-            },
-        });
+        const [user] = await db
+            .select({
+                id: users.id,
+                username: users.username,
+                email: users.email,
+                displayName: users.displayName,
+                profilePictureUrl: users.profilePictureUrl,
+                passwordHash: users.passwordHash,
+            })
+            .from(users)
+            .where(eq(users.email, data.email))
+            .limit(1);
 
         if (!user) {
             throw new AppError('Invalid email or password', 401);
@@ -142,9 +145,11 @@ export const authService = {
             const payload = verifyRefreshToken(token);
 
             // Verify user still exists
-            const user = await prisma.user.findUnique({
-                where: { id: payload.userId },
-            });
+            const [user] = await db
+                .select()
+                .from(users)
+                .where(eq(users.id, payload.userId))
+                .limit(1);
 
             if (!user) {
                 throw new AppError('User not found', 404);

@@ -1,7 +1,9 @@
 import { Router, Request, Response } from 'express';
 import { body, validationResult } from 'express-validator';
 import { authMiddleware } from '../middleware/auth.middleware.js';
-import prisma from '../utils/prisma.js';
+import { db } from '../db/index.js';
+import { entries, comments } from '../db/schema.js';
+import { eq, and, desc, count, isNull } from 'drizzle-orm';
 import notificationService from '../services/notification.service.js';
 
 const router = Router();
@@ -28,10 +30,15 @@ router.post(
             const userId = req.user!.userId;
 
             // Check if entry exists
-            const entry = await prisma.entry.findUnique({
-                where: { id: entryId },
-                include: { user: { select: { id: true, username: true } } }
-            });
+            const [entry] = await db
+                .select({
+                    id: entries.id,
+                    userId: entries.userId,
+                    title: entries.title
+                })
+                .from(entries)
+                .where(eq(entries.id, entryId))
+                .limit(1);
 
             if (!entry) {
                 res.status(404).json({ error: 'Entry not found' });
@@ -39,34 +46,46 @@ router.post(
             }
 
             // Create comment
-            const comment = await prisma.comment.create({
-                data: {
+            const [newComment] = await db
+                .insert(comments)
+                .values({
                     content,
                     userId,
                     entryId,
                     parentCommentId: parentCommentId || null,
-                },
-                include: {
+                })
+                .returning();
+
+            // Fetch fully populated comment for response and notifications
+            const comment = await db.query.comments.findFirst({
+                where: eq(comments.id, newComment.id),
+                with: {
                     user: {
-                        select: {
+                        columns: {
                             id: true,
                             username: true,
                             displayName: true,
                             profilePictureUrl: true,
-                        },
+                        }
                     },
                     parentComment: {
-                        select: {
+                        columns: {
                             userId: true
                         }
                     }
-                },
+                }
             });
 
+            if (!comment) {
+                res.status(500).json({ error: 'Failed to retrieve created comment' });
+                return;
+            }
+
             // Get updated comment count
-            const commentCount = await prisma.comment.count({
-                where: { entryId }
-            });
+            const [{ commentCount }] = await db
+                .select({ commentCount: count() })
+                .from(comments)
+                .where(eq(comments.entryId, entryId));
 
             // --- Send Notifications ---
             const actorName = comment.user.displayName || comment.user.username;
@@ -109,50 +128,50 @@ router.post(
 /**
  * @route   GET /api/comments/:entryId
  * @desc    Get comments for an entry
- * @access  Private (or Public depending on entry visibility, but we use authMiddleware generally)
+ * @access  Private
  */
 router.get('/:entryId', authMiddleware, async (req: Request, res: Response): Promise<void> => {
     try {
         const { entryId } = req.params;
         const page = parseInt(req.query.page as string) || 1;
         const limit = parseInt(req.query.limit as string) || 50;
-        const skip = (page - 1) * limit;
+        const offset = (page - 1) * limit;
 
-        const [comments, total] = await Promise.all([
-            prisma.comment.findMany({
-                where: { entryId, parentCommentId: null }, // Fetch top-level comments; replies fetched separately or recursively if needed
-                skip,
-                take: limit,
-                include: {
+        const [commentsList, [{ total }]] = await Promise.all([
+            db.query.comments.findMany({
+                where: and(eq(comments.entryId, entryId), isNull(comments.parentCommentId)),
+                limit,
+                offset,
+                orderBy: desc(comments.createdAt),
+                with: {
                     user: {
-                        select: {
+                        columns: {
                             id: true,
                             username: true,
                             displayName: true,
                             profilePictureUrl: true,
-                        },
+                        }
                     },
-                    replies: { // Include immediate replies
-                        include: {
+                    replies: {
+                        with: {
                             user: {
-                                select: {
+                                columns: {
                                     id: true,
                                     username: true,
                                     displayName: true,
                                     profilePictureUrl: true,
-                                },
-                            },
+                                }
+                            }
                         },
-                        orderBy: { createdAt: 'asc' }
+                        orderBy: (replies, { asc }) => [asc(replies.createdAt)]
                     }
-                },
-                orderBy: { createdAt: 'desc' },
+                }
             }),
-            prisma.comment.count({ where: { entryId, parentCommentId: null } }),
+            db.select({ total: count() }).from(comments).where(and(eq(comments.entryId, entryId), isNull(comments.parentCommentId))),
         ]);
 
         res.json({
-            comments,
+            comments: commentsList,
             pagination: {
                 page,
                 limit,
@@ -176,9 +195,9 @@ router.delete('/:commentId', authMiddleware, async (req: Request, res: Response)
         const { commentId } = req.params;
         const userId = req.user!.userId;
 
-        const comment = await prisma.comment.findUnique({
-            where: { id: commentId },
-            include: { entry: true },
+        const comment = await db.query.comments.findFirst({
+            where: eq(comments.id, commentId),
+            with: { entry: true },
         });
 
         if (!comment) {
@@ -192,13 +211,12 @@ router.delete('/:commentId', authMiddleware, async (req: Request, res: Response)
             return;
         }
 
-        await prisma.comment.delete({
-            where: { id: commentId },
-        });
+        await db.delete(comments).where(eq(comments.id, commentId));
 
-        const commentCount = await prisma.comment.count({
-            where: { entryId: comment.entryId }
-        });
+        const [{ commentCount }] = await db
+            .select({ commentCount: count() })
+            .from(comments)
+            .where(eq(comments.entryId, comment.entryId));
 
         res.json({ message: 'Comment deleted', commentCount });
     } catch (error) {

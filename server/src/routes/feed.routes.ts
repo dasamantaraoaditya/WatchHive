@@ -1,10 +1,11 @@
 import { Router, Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { db } from '../db/index.js';
+import { users, entries, follows } from '../db/schema.js';
+import { eq, desc, sql, inArray } from 'drizzle-orm';
 import { authMiddleware } from '../middleware/auth.middleware.js';
 import tmdbService from '../services/tmdb.service.js';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 // ============================================
 // GET /api/v1/feed
@@ -18,50 +19,53 @@ router.get('/', authMiddleware, async (req: Request, res: Response): Promise<voi
         const offset = (page - 1) * limit;
 
         // 1. Get followed user IDs
-        const follows = await prisma.follow.findMany({
-            where: { followerId: userId },
-            select: { followingId: true }
-        });
-        const followedIds = follows.map(f => f.followingId);
+        const followList = await db
+            .select({ followingId: follows.followingId })
+            .from(follows)
+            .where(eq(follows.followerId, userId));
+
+        const followedIds = followList.map(f => f.followingId);
 
         // Include self in the feed
         const relevantUserIds = [...followedIds, userId];
 
         // 2. Fetch Entries (Followed + Self)
-        const rawEntries = await prisma.entry.findMany({
-            where: {
-                userId: { in: relevantUserIds }
+        const rawEntries = await db.select({
+            id: entries.id,
+            userId: entries.userId,
+            tmdbId: entries.tmdbId,
+            title: entries.title,
+            type: entries.type,
+            watchedAt: entries.watchedAt,
+            rating: entries.rating,
+            review: entries.review,
+            tags: entries.tags,
+            isRewatch: entries.isRewatch,
+            watchLocation: entries.watchLocation,
+            createdAt: entries.createdAt,
+            user: {
+                id: users.id,
+                username: users.username,
+                displayName: users.displayName,
+                profilePictureUrl: users.profilePictureUrl,
+                isPrivate: users.isPrivate
             },
-            include: {
-                user: {
-                    select: {
-                        id: true,
-                        username: true,
-                        displayName: true,
-                        profilePictureUrl: true,
-                        isPrivate: true
-                    }
-                },
-                _count: {
-                    select: {
-                        likes: true,
-                        comments: true
-                    }
-                },
-                likes: {
-                    where: { userId: userId },
-                    select: { id: true }
-                }
-            },
-            orderBy: { createdAt: 'desc' },
-            skip: offset,
-            take: limit,
-        });
+            likesCount: sql<number>`(SELECT count(*) FROM "Like" WHERE "Like"."entryId" = ${entries.id})`.mapWith(Number),
+            commentsCount: sql<number>`(SELECT count(*) FROM "Comment" WHERE "Comment"."entryId" = ${entries.id})`.mapWith(Number),
+            isLiked: sql<boolean>`EXISTS(SELECT 1 FROM "Like" WHERE "Like"."entryId" = ${entries.id} AND "Like"."userId" = ${userId})`
+        })
+            .from(entries)
+            .innerJoin(users, eq(entries.userId, users.id))
+            .where(inArray(entries.userId, relevantUserIds))
+            .orderBy(desc(entries.createdAt))
+            .limit(limit)
+            .offset(offset);
 
         // Sort by "Trending Score" (Mix of Date & Engagement)
-        const entries = rawEntries.map(entry => {
-            const likes = entry._count.likes || 0;
-            const comments = entry._count.comments || 0;
+        // Note: Drizzle result already has counts mapped as properties
+        const entriesWithScores = rawEntries.map(entry => {
+            const likes = entry.likesCount || 0;
+            const comments = entry.commentsCount || 0;
             const engagement = likes + (comments * 2);
             const hoursAge = Math.max(0.5, (Date.now() - new Date(entry.createdAt).getTime()) / (1000 * 60 * 60));
             const score = (engagement + 1) / Math.pow(hoursAge + 2, 1.5);
@@ -73,10 +77,12 @@ router.get('/', authMiddleware, async (req: Request, res: Response): Promise<voi
 
         try {
             // A. Fetch Most Recent User Entry for Contextual Suggestions
-            const lastEntry = await prisma.entry.findFirst({
-                where: { userId },
-                orderBy: { watchedAt: 'desc' }
-            });
+            const [lastEntry] = await db
+                .select()
+                .from(entries)
+                .where(eq(entries.userId, userId))
+                .orderBy(desc(entries.watchedAt))
+                .limit(1);
 
             // C. Fetch TMDb Suggestions
             let tmdbRecs: any[] = [];
@@ -93,11 +99,6 @@ router.get('/', authMiddleware, async (req: Request, res: Response): Promise<voi
             const globalTrending = await tmdbService.getTrending('all', 'week');
             const trendingItems = globalTrending.results.map((r: any) => ({ ...r, reason: "Trending this week" }));
 
-            // D. Add internal trends if they are noteworthy (e.g., liked by others)
-            // For now, we mix them in as "Popular on WatchHive"
-            // Note: internalTrending entries only have IDs, we'd need TMDb data to display them as suggestions
-            // To keep it simple, we'll just prioritize global/rec results but we could pull internal ones if needed.
-
             suggestions = [...tmdbRecs.slice(0, 10), ...trendingItems.slice(0, 10)];
 
             // Randomize slightly
@@ -110,23 +111,25 @@ router.get('/', authMiddleware, async (req: Request, res: Response): Promise<voi
         }
 
         // Pre-fetch user's watched IDs to mark items in feed
-        const userEntries = await prisma.entry.findMany({
-            where: { userId },
-            select: { tmdbId: true }
-        });
-        const watchedTmdbIds = new Set(userEntries.map(e => e.tmdbId));
+        const userEntriesList = await db
+            .select({ tmdbId: entries.tmdbId })
+            .from(entries)
+            .where(eq(entries.userId, userId));
+
+        const watchedTmdbIds = new Set(userEntriesList.map(e => e.tmdbId));
 
         // 4. Mix Content Strategy
         const feedItems: any[] = [];
         let suggestionIndex = (page - 1) * 2;
 
-        const mappedEntries = entries.map(entry => ({
+        const mappedEntries = entriesWithScores.map(entry => ({
             type: 'ENTRY',
             id: entry.id,
             timestamp: entry.createdAt,
             data: {
                 ...entry,
-                isLiked: entry.likes.length > 0,
+                _count: { likes: entry.likesCount, comments: entry.commentsCount },
+                isLiked: entry.isLiked,
                 isWatched: watchedTmdbIds.has(entry.tmdbId)
             }
         }));
@@ -169,8 +172,8 @@ router.get('/', authMiddleware, async (req: Request, res: Response): Promise<voi
 
         res.json({
             items: feedItems,
-            nextPage: entries.length === limit ? page + 1 : null,
-            hasMore: entries.length === limit
+            nextPage: rawEntries.length === limit ? page + 1 : null,
+            hasMore: rawEntries.length === limit
         });
 
     } catch (error) {

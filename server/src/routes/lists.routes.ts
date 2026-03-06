@@ -1,5 +1,7 @@
 import { Router, Request, Response } from 'express';
-import prisma from '../utils/prisma.js';
+import { db } from '../db/index.js';
+import { lists, listItems } from '../db/schema.js';
+import { eq, and, desc } from 'drizzle-orm';
 import { authMiddleware } from '../middleware/auth.middleware.js';
 
 const router = Router();
@@ -10,31 +12,29 @@ router.get('/watchlist', authMiddleware, async (req: Request, res: Response): Pr
         const userId = req.user!.userId;
 
         // Try to find a list named "Watchlist" for this user
-        let watchlist = await prisma.list.findFirst({
-            where: {
-                userId,
-                name: 'Watchlist',
-            },
-            include: {
+        let watchlist = await db.query.lists.findFirst({
+            where: and(eq(lists.userId, userId), eq(lists.name, 'Watchlist')),
+            with: {
                 items: {
-                    orderBy: { addedAt: 'desc' },
+                    orderBy: desc(listItems.addedAt),
                 },
             },
         });
 
         // If not found, create it
         if (!watchlist) {
-            watchlist = await prisma.list.create({
-                data: {
+            const [newList] = await db
+                .insert(lists)
+                .values({
                     userId,
                     name: 'Watchlist',
                     description: 'Movies and shows I plan to watch',
                     isPublic: true,
-                },
-                include: {
-                    items: true,
-                },
-            });
+                })
+                .returning();
+
+            // Return with empty items for consistency
+            watchlist = { ...newList, items: [] } as any;
         }
 
         res.json(watchlist);
@@ -52,9 +52,11 @@ router.post('/:listId/items', authMiddleware, async (req: Request, res: Response
         const userId = req.user!.userId;
 
         // Verify list ownership
-        const list = await prisma.list.findUnique({
-            where: { id: listId },
-        });
+        const [list] = await db
+            .select()
+            .from(lists)
+            .where(eq(lists.id, listId))
+            .limit(1);
 
         if (!list) {
             res.status(404).json({ error: 'List not found' });
@@ -67,13 +69,17 @@ router.post('/:listId/items', authMiddleware, async (req: Request, res: Response
         }
 
         // Check if item already exists
-        const existing = await prisma.listItem.findFirst({
-            where: {
-                listId,
-                tmdbId: Number(tmdbId),
-                mediaType: mediaType || 'movie',
-            },
-        });
+        const [existing] = await db
+            .select()
+            .from(listItems)
+            .where(
+                and(
+                    eq(listItems.listId, listId),
+                    eq(listItems.tmdbId, Number(tmdbId)),
+                    eq(listItems.mediaType, mediaType || 'movie')
+                )
+            )
+            .limit(1);
 
         if (existing) {
             res.status(400).json({ error: 'Item already in list' });
@@ -81,19 +87,22 @@ router.post('/:listId/items', authMiddleware, async (req: Request, res: Response
         }
 
         // Get max order index
-        const lastItem = await prisma.listItem.findFirst({
-            where: { listId },
-            orderBy: { orderIndex: 'desc' },
-        });
+        const [lastItem] = await db
+            .select({ orderIndex: listItems.orderIndex })
+            .from(listItems)
+            .where(eq(listItems.listId, listId))
+            .orderBy(desc(listItems.orderIndex))
+            .limit(1);
 
-        const newItem = await prisma.listItem.create({
-            data: {
+        const [newItem] = await db
+            .insert(listItems)
+            .values({
                 listId,
                 tmdbId: Number(tmdbId),
                 mediaType: mediaType || 'movie',
                 orderIndex: lastItem ? lastItem.orderIndex + 1 : 0,
-            },
-        });
+            })
+            .returning();
 
         res.json(newItem);
     } catch (error) {
@@ -108,29 +117,32 @@ router.delete('/:listId/items/:tmdbId', authMiddleware, async (req: Request, res
         const { listId, tmdbId } = req.params;
         const userId = req.user!.userId;
 
-        const list = await prisma.list.findUnique({ where: { id: listId } });
+        const [list] = await db
+            .select()
+            .from(lists)
+            .where(eq(lists.id, listId))
+            .limit(1);
 
         if (!list || list.userId !== userId) {
             res.status(403).json({ error: 'Unauthorized' });
             return;
         }
 
-        // Find the item by tmdbId
-        const item = await prisma.listItem.findFirst({
-            where: {
-                listId,
-                tmdbId: Number(tmdbId),
-            },
-        });
+        // Find and delete the item by tmdbId
+        const result = await db
+            .delete(listItems)
+            .where(
+                and(
+                    eq(listItems.listId, listId),
+                    eq(listItems.tmdbId, Number(tmdbId))
+                )
+            )
+            .returning();
 
-        if (!item) {
+        if (result.length === 0) {
             res.status(404).json({ error: 'Item not found in list' });
             return;
         }
-
-        await prisma.listItem.delete({
-            where: { id: item.id },
-        });
 
         res.json({ message: 'Removed' });
     } catch (error) {
