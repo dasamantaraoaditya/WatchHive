@@ -8,6 +8,14 @@ Track, share, and discover movies and TV shows with friends.
 
 ## Quick Start
 
+### Resources
+
+Project : https://github.com/users/dasamantaraoaditya/projects/3
+FE :
+BE :
+Stage :
+PROD : 
+
 ### Prerequisites
 - Node.js v18+, npm, PostgreSQL (Supabase)
 
