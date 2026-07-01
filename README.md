@@ -11,10 +11,14 @@ Track, share, and discover movies and TV shows with friends.
 ### Resources
 
 Project : https://github.com/users/dasamantaraoaditya/projects/3
-FE :
-BE :
-Stage :
-PROD : 
+
+FE : https://github.com/dasamantaraoaditya/WatchHive-Frontend
+
+BE : https://github.com/dasamantaraoaditya/WatchHive-Backend
+
+Stage : https://watchhive-frontend.vercel.app/
+
+PROD : -
 
 ### Prerequisites
 - Node.js v18+, npm, PostgreSQL (Supabase)
